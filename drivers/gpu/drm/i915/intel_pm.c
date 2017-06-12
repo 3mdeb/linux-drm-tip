@@ -58,24 +58,24 @@
 
 static void gen9_init_clock_gating(struct drm_i915_private *dev_priv)
 {
-	/* See Bspec note for PSR2_CTL bit 31, Wa#828:skl,bxt,kbl */
+	/* See Bspec note for PSR2_CTL bit 31, Wa#828:skl,bxt,kbl,cfl */
 	I915_WRITE(CHICKEN_PAR1_1,
 		   I915_READ(CHICKEN_PAR1_1) | SKL_EDP_PSR_FIX_RDWRAP);
 
 	I915_WRITE(GEN8_CONFIG0,
 		   I915_READ(GEN8_CONFIG0) | GEN9_DEFAULT_FIXES);
 
-	/* WaEnableChickenDCPR:skl,bxt,kbl,glk */
+	/* WaEnableChickenDCPR:skl,bxt,kbl,glk,cfl */
 	I915_WRITE(GEN8_CHICKEN_DCPR_1,
 		   I915_READ(GEN8_CHICKEN_DCPR_1) | MASK_WAKEMEM);
 
-	/* WaFbcTurnOffFbcWatermark:skl,bxt,kbl */
-	/* WaFbcWakeMemOn:skl,bxt,kbl,glk */
+	/* WaFbcTurnOffFbcWatermark:skl,bxt,kbl,cfl */
+	/* WaFbcWakeMemOn:skl,bxt,kbl,glk,cfl */
 	I915_WRITE(DISP_ARB_CTL, I915_READ(DISP_ARB_CTL) |
 		   DISP_FBC_WM_DIS |
 		   DISP_FBC_MEMORY_WAKE);
 
-	/* WaFbcHighMemBwCorruptionAvoidance:skl,bxt,kbl */
+	/* WaFbcHighMemBwCorruptionAvoidance:skl,bxt,kbl,cfl */
 	I915_WRITE(ILK_DPFC_CHICKEN, I915_READ(ILK_DPFC_CHICKEN) |
 		   ILK_DPFC_DISABLE_DUMMY0);
 }
@@ -3549,7 +3549,7 @@ static bool skl_needs_memory_bw_wa(struct intel_atomic_state *state)
 static bool
 intel_has_sagv(struct drm_i915_private *dev_priv)
 {
-	if (IS_KABYLAKE(dev_priv))
+	if (IS_KABYLAKE(dev_priv) || IS_COFFEELAKE(dev_priv))
 		return true;
 
 	if (IS_SKYLAKE(dev_priv) &&
@@ -3841,19 +3841,25 @@ skl_plane_downscale_amount(const struct intel_crtc_state *cstate,
 
 	/* n.b., src is 16.16 fixed point, dst is whole integer */
 	if (plane->id == PLANE_CURSOR) {
+		/*
+		 * Cursors only support 0/180 degree rotation,
+		 * hence no need to account for rotation here.
+		 */
 		src_w = pstate->base.src_w >> 16;
 		src_h = pstate->base.src_h >> 16;
 		dst_w = pstate->base.crtc_w;
 		dst_h = pstate->base.crtc_h;
 	} else {
+		/*
+		 * Src coordinates are already rotated by 270 degrees for
+		 * the 90/270 degree plane rotation cases (to match the
+		 * GTT mapping), hence no need to account for rotation here.
+		 */
 		src_w = drm_rect_width(&pstate->base.src) >> 16;
 		src_h = drm_rect_height(&pstate->base.src) >> 16;
 		dst_w = drm_rect_width(&pstate->base.dst);
 		dst_h = drm_rect_height(&pstate->base.dst);
 	}
-
-	if (drm_rotation_90_or_270(pstate->base.rotation))
-		swap(dst_w, dst_h);
 
 	fp_w_ratio = fixed_16_16_div(src_w, dst_w);
 	fp_h_ratio = fixed_16_16_div(src_h, dst_h);
@@ -3978,11 +3984,13 @@ skl_plane_relative_data_rate(const struct intel_crtc_state *cstate,
 	if (y && format != DRM_FORMAT_NV12)
 		return 0;
 
+	/*
+	 * Src coordinates are already rotated by 270 degrees for
+	 * the 90/270 degree plane rotation cases (to match the
+	 * GTT mapping), hence no need to account for rotation here.
+	 */
 	width = drm_rect_width(&intel_pstate->base.src) >> 16;
 	height = drm_rect_height(&intel_pstate->base.src) >> 16;
-
-	if (drm_rotation_90_or_270(pstate->rotation))
-		swap(width, height);
 
 	/* for planar format */
 	if (format == DRM_FORMAT_NV12) {
@@ -4066,11 +4074,13 @@ skl_ddb_min_alloc(const struct drm_plane_state *pstate,
 	    fb->modifier != I915_FORMAT_MOD_Yf_TILED)
 		return 8;
 
+	/*
+	 * Src coordinates are already rotated by 270 degrees for
+	 * the 90/270 degree plane rotation cases (to match the
+	 * GTT mapping), hence no need to account for rotation here.
+	 */
 	src_w = drm_rect_width(&intel_pstate->base.src) >> 16;
 	src_h = drm_rect_height(&intel_pstate->base.src) >> 16;
-
-	if (drm_rotation_90_or_270(pstate->rotation))
-		swap(src_w, src_h);
 
 	/* Halve UV plane width and height for NV12 */
 	if (fb->format->format == DRM_FORMAT_NV12 && !y) {
@@ -4449,8 +4459,9 @@ static int skl_compute_plane_wm(const struct drm_i915_private *dev_priv,
 		  fb->modifier == I915_FORMAT_MOD_Yf_TILED;
 	x_tiled = fb->modifier == I915_FORMAT_MOD_X_TILED;
 
-	/* Display WA #1141: kbl. */
-	if (IS_KABYLAKE(dev_priv) && dev_priv->ipc_enabled)
+	/* Display WA #1141: kbl,cfl */
+	if ((IS_KABYLAKE(dev_priv) || IS_COFFEELAKE(dev_priv)) &&
+	    dev_priv->ipc_enabled)
 		latency += 4;
 
 	if (apply_memory_bw_wa && x_tiled)
@@ -4460,12 +4471,14 @@ static int skl_compute_plane_wm(const struct drm_i915_private *dev_priv,
 		width = intel_pstate->base.crtc_w;
 		height = intel_pstate->base.crtc_h;
 	} else {
+		/*
+		 * Src coordinates are already rotated by 270 degrees for
+		 * the 90/270 degree plane rotation cases (to match the
+		 * GTT mapping), hence no need to account for rotation here.
+		 */
 		width = drm_rect_width(&intel_pstate->base.src) >> 16;
 		height = drm_rect_height(&intel_pstate->base.src) >> 16;
 	}
-
-	if (drm_rotation_90_or_270(pstate->rotation))
-		swap(width, height);
 
 	cpp = fb->format->cpp[0];
 	plane_pixel_rate = skl_adjusted_plane_pixel_rate(cstate, intel_pstate);
@@ -8300,7 +8313,7 @@ static void kabylake_init_clock_gating(struct drm_i915_private *dev_priv)
 		I915_WRITE(GEN6_UCGCTL1, I915_READ(GEN6_UCGCTL1) |
 			   GEN6_GAMUNIT_CLOCK_GATE_DISABLE);
 
-	/* WaFbcNukeOnHostModify:kbl */
+	/* WaFbcNukeOnHostModify:kbl,cfl */
 	I915_WRITE(ILK_DPFC_CHICKEN, I915_READ(ILK_DPFC_CHICKEN) |
 		   ILK_DPFC_NUKE_ON_ANY_MODIFICATION);
 }
@@ -8768,7 +8781,7 @@ void intel_init_clock_gating_hooks(struct drm_i915_private *dev_priv)
 {
 	if (IS_SKYLAKE(dev_priv))
 		dev_priv->display.init_clock_gating = skylake_init_clock_gating;
-	else if (IS_KABYLAKE(dev_priv))
+	else if (IS_KABYLAKE(dev_priv) || IS_COFFEELAKE(dev_priv))
 		dev_priv->display.init_clock_gating = kabylake_init_clock_gating;
 	else if (IS_BROXTON(dev_priv))
 		dev_priv->display.init_clock_gating = bxt_init_clock_gating;

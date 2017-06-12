@@ -24,12 +24,11 @@ void snd_interval_mulkdiv(const struct snd_interval *a, unsigned int k,
 int snd_pcm_hw_constraints_init(struct snd_pcm_substream *substream);
 int snd_pcm_hw_constraints_complete(struct snd_pcm_substream *substream);
 
-int snd_pcm_hw_params_choose(struct snd_pcm_substream *substream,
-			     struct snd_pcm_hw_params *params);
-
 int snd_pcm_hw_constraint_mask(struct snd_pcm_runtime *runtime,
 			       snd_pcm_hw_param_t var, u_int32_t mask);
 
+int pcm_lib_apply_appl_ptr(struct snd_pcm_substream *substream,
+			   snd_pcm_uframes_t appl_ptr);
 int snd_pcm_update_state(struct snd_pcm_substream *substream,
 			 struct snd_pcm_runtime *runtime);
 int snd_pcm_update_hw_ptr(struct snd_pcm_substream *substream);
